@@ -1,0 +1,388 @@
+#include "stm32f4xx_hal.h"
+#include "fatfs.h"
+
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <string.h>
+
+#define ILI9341_INCLUDE_FONT_6x8
+#define ILI9341_INCLUDE_FONT_7x10
+#define ILI9341_INCLUDE_FONT_11x18
+#define ILI9341_INCLUDE_FONT_16x26
+#include "ILI9341_Driver.h"
+#include "Graph.h"
+#include "TouchScreen.h"
+#include "DebugProtocol.h"
+#include "Times.h"
+
+extern SPI_HandleTypeDef hspi1;
+extern SPI_HandleTypeDef hspi2;
+extern SPI_HandleTypeDef hspi3;
+extern DMA_HandleTypeDef hdma_spi2_tx;
+extern UART_HandleTypeDef huart1;
+
+typedef struct
+{
+    FATFS FatFs;         //Fatfs handle
+    FIL fil;             //file handle
+    uint16_t findex;     //file index
+    char fname[16];      //file name
+    FRESULT status;         //OK - true, ERROR - false
+    uint32_t numRecords; //records counter
+} file_t;
+
+timeUs_t currentTimeUs = 0, previousTimeUs = 0;
+
+static void InitGraphInterface();
+static void GraphsAndTextUpdate(timeDelta_t, float*);
+static void InitFileSystem(file_t*);
+static void FileDataUpdate(file_t *file, timeUs_t time, float*);
+static void FileSync(file_t*);
+
+ILI9341_Port cs  = {TFT_CS_GPIO_Port , TFT_CS_Pin };
+ILI9341_Port dc  = {TFT_DC_GPIO_Port , TFT_DC_Pin };
+ILI9341_Port rst = {TFT_RST_GPIO_Port, TFT_RST_Pin};
+ILI9341_Port led = {TFT_LED_GPIO_Port, TFT_LED_Pin};
+
+Touch_Port touch_cs  = {TOUCH_CS_GPIO_Port , TOUCH_CS_Pin };
+Touch_Port touch_int  = {TOUCH_INT_GPIO_Port , TOUCH_INT_Pin };
+
+#ifdef ILI9341_INCLUDE_FONT_6x8
+ILI9341_FontDef Font_6x8 = {6, 8, Font6x8, 32, 126};
+#endif
+
+#ifdef ILI9341_INCLUDE_FONT_7x10
+ILI9341_FontDef Font_7x10 = {7, 10, Font7x10, 32, 126};
+#endif
+
+#ifdef ILI9341_INCLUDE_FONT_11x18
+ILI9341_FontDef Font_11x18 = {11, 18, Font11x18, 32, 126};
+#endif
+
+#ifdef ILI9341_INCLUDE_FONT_16x26
+ILI9341_FontDef Font_16x26 = {16, 26, Font16x26, 32, 126};
+#endif
+
+rect_t vBat_wnd, iBat_wnd, pid_wnd, text_wnd;
+point_t vBat_hdr, iBat_hdr, pid_hdr;
+
+graph_t vBat_graph, iBat_graph, iFilt_graph, pid_graph;
+
+bool f_touch = false;
+uint16_t guard_cnt = 0;
+const uint16_t guard_threshold = 500;
+uint16_t x, y;
+
+const uint16_t data_num = 11;
+float fltData[RX_MAX_CNT/sizeof(float)] = {0.0};
+
+file_t file;
+const uint16_t samples_threshold = 50; //to save the every 50 sample
+float fltDataAvg[RX_MAX_CNT/sizeof(float)] = {0.0};
+uint16_t samples_cnt = 0;
+
+bool f_syncFile = false;
+uint16_t syncFile_cnt = 0;
+const uint16_t sync_period = 5000; //sync file period in milliseconds
+
+bool first_filter_load = true;
+
+/**
+  * @brief
+  * @param None
+  * @retval None
+  */
+void initialization(void)
+{
+  usTicks = SystemCoreClock / 1000000;
+
+  ILI9341_Set_Interface(&hspi2, true, &cs, &dc, &rst, &led);
+  ILI9341_BackLight(true);
+  ILI9341_Init();
+  ILI9341_SetOrientation(SCREEN_VERTICAL_0GRAD);//SCREEN_HORIZONTAL_180GRAD);
+  ILI9341_Clear(Black);
+
+  Touch_Set_Interface(&hspi1, &touch_cs, &touch_int);
+
+  InitGraphInterface();
+
+  Debug_InitProtocol(&huart1, fltData);
+
+  InitFileSystem(&file);  
+}
+
+/**
+  * @brief
+  * @param None
+  * @retval None
+  */
+void exec(void)
+{
+  if (Debug_IsRxready())
+  {
+      currentTimeUs = micros();
+      timeDelta_t dT = currentTimeUs - previousTimeUs;
+      previousTimeUs = currentTimeUs;
+      for (uint32_t i = 0; i < data_num; i++)
+      {
+          fltDataAvg[i] += fltData[i];
+      }
+      GraphsAndTextUpdate(dT, fltData);
+      if (++samples_cnt == samples_threshold)
+      {
+          samples_cnt = 0;
+          for (uint32_t i = 0; i < data_num; i++)
+          {
+              fltDataAvg[i] /= samples_threshold;
+          }
+          FileDataUpdate(&file, currentTimeUs, fltDataAvg);
+          for (uint32_t i = 0; i < data_num; i++)
+          {
+              fltDataAvg[i] = 0;
+          }
+      }
+  }
+
+  if (f_touch == true)
+  {
+      f_touch = false;
+      if (y < text_wnd.bottom)
+      {
+          ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
+      }
+  }
+
+  if (f_syncFile == true)
+  {
+      f_syncFile = false;
+      FileSync(&file);
+  }
+}
+
+/**
+  * @brief UART RX complete callback
+  * @param None
+  * @retval None
+  */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    Debug_RxCpltCallback(huart);
+}
+
+/**
+  * @brief
+  * @retval None
+  */
+void HAL_SYSTICK_Callback()
+{
+    if(guard_cnt != 0)
+    {
+        --guard_cnt;
+    }
+
+    if (++syncFile_cnt == sync_period)
+    {
+        syncFile_cnt = 0;
+        f_syncFile = true;
+    }
+}
+
+/**
+  * @brief
+  * @retval None
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == touch_int.pin)
+    {
+        if (guard_cnt == 0 && f_touch == false)
+        {
+            if (HAL_GPIO_ReadPin(touch_int.gpio, touch_int.pin) == GPIO_PIN_RESET)
+            {
+                Touch_Get_Coordinates(&x, &y, true);
+                f_touch = true;
+            }
+
+            guard_cnt =  guard_threshold;
+        }
+    }
+}
+
+/**
+  * @brief  To draw two windows for the Graphs
+  * @retval None
+  */
+static void InitGraphInterface()
+{
+    char str[32];
+    const uint16_t wnd_height = 130;
+    const uint16_t y_offset= 70;
+
+    vBat_hdr.x = 0; vBat_hdr.y = y_offset - Font_7x10.height;
+    sprintf(str, "iBat(0-5)A");
+    ILI9341_WriteString(str, Font_7x10, vBat_hdr.x, vBat_hdr.y, Yellow, Red);
+
+    iBat_hdr.x = 100; iBat_hdr.y = y_offset - Font_7x10.height;
+    sprintf(str, "vBat(9-18)V");
+    ILI9341_WriteString(str, Font_7x10, iBat_hdr.x, iBat_hdr.y, Blue, Green);
+
+    pid_hdr.x = 200; pid_hdr.y = y_offset - Font_7x10.height;
+    sprintf(str, "PID(roll)(0 - 2)");
+    ILI9341_WriteString(str, Font_7x10, pid_hdr.x, pid_hdr.y, Green, Blue);
+
+    iBat_wnd.left   = 1;
+    iBat_wnd.top    = y_offset;
+    iBat_wnd.right  = 318;
+    iBat_wnd.bottom = iBat_wnd.top + wnd_height;
+    Graph_InitDynamic(&iBat_wnd, &iFilt_graph, 0, 500, Yellow, Black);
+    Graph_InitDynamic(&iBat_wnd, &iBat_graph, 0, 500, Red, Black);
+
+    vBat_wnd.left   = 1;
+    vBat_wnd.top    = iBat_wnd.bottom + 5;
+    vBat_wnd.right  = 318;
+    vBat_wnd.bottom = vBat_wnd.top + wnd_height;
+    Graph_InitDynamic(&vBat_wnd, &vBat_graph, 90, 180, Green, Black);
+
+    pid_wnd.left   = 1;
+    pid_wnd.top    = vBat_wnd.bottom + 5;
+    pid_wnd.right  = 318;
+    pid_wnd.bottom = pid_wnd.top + wnd_height;
+    Graph_InitDynamic(&pid_wnd, &pid_graph, 0, 20, Blue, Black);
+
+    text_wnd.left = 0; text_wnd.right = 320; text_wnd.top = 0; text_wnd.bottom = Font_16x26.height * 2;
+}
+
+/**
+  * @brief  To plot graphs and update text information
+  * @retval None
+  */
+static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
+{
+    char str[32];
+    point_t point;
+    uint32_t data;
+
+    //IBat filtered
+    point.x = 0; point.y = Font_16x26.height + 5;
+    data = (uint32_t)(fabs(fltData[1]) * 100);
+    sprintf(str, "I%2lu.%02lu", data/100, data % 100);
+    ILI9341_WriteString(str, Font_16x26, point.x, point.y, Red, Black);
+
+    //vBat filtered
+    point.x = 0; point.y = 0;
+    data = (uint32_t)(fltData[3] * 10);
+    sprintf(str, "V%2lu.%1lu", data/10, data % 10);
+    ILI9341_WriteString(str, Font_16x26, point.x, point.y, Green, Black);
+
+    //Capacity mAh
+    point.x = Font_16x26.width * 8; point.y = Font_16x26.height + 5;
+    data = (uint32_t)(fabs(fltData[4]) * 10);
+    sprintf(str, "E%4lu.%1lumAh", data/10, data % 10);
+    ILI9341_WriteString(str, Font_16x26, point.x, point.y, Orange, Black);
+ 
+    int16_t iFilt_int = (int16_t)(fltData[1] * 100);
+    Graph_DynamicDraw(iFilt_int, &iFilt_graph, false);
+
+    int16_t iBat_int = (int16_t)(fltData[0] * 100);
+    Graph_DynamicDraw(iBat_int, &iBat_graph, true);
+
+    int16_t vBat_int = (int16_t)(fltData[2] * 10);
+    Graph_DynamicDraw(vBat_int, &vBat_graph, true);
+
+    int16_t pid_int = 1;
+    Graph_DynamicDraw(pid_int, &pid_graph, true);
+}
+
+/**
+  * @brief  Initialize a file system and create a file
+  * @retval None
+  */
+static void InitFileSystem(file_t *file)
+{
+    DIR dir;
+    FILINFO finfo;
+    char str[256];
+
+    file->findex = 0;
+
+    file->status = f_mount(&file->FatFs, "", 1);
+
+    while (file->status == FR_OK)
+    {
+        sprintf(file->fname, "log%d.txt", file->findex);
+        file->status = f_findfirst(&dir, &finfo, "", file->fname);
+        if (file->status == FR_OK && finfo.fname[0] == 0)
+        {
+            file->status = f_open(&file->fil, file->fname, FA_WRITE | FA_OPEN_ALWAYS | FA_CREATE_ALWAYS);
+            break;
+        }
+        else
+        {
+            ++file->findex;
+        }
+    }
+
+    if (file->status == FR_OK)
+    {
+        sprintf(str, "    N:         T(ms):     U(V):  I(A):   E(Wh):  \r\n");
+
+        uint32_t bytesWrote;
+        file->status = f_write(&file->fil, str, strlen(str), (UINT*)&bytesWrote);
+        file->numRecords = 0;
+    }
+}
+
+/**
+  * @brief  Update file
+  * @retval None
+  */
+static void FileDataUpdate(file_t *file, timeUs_t time, float *fltData)
+{
+    char str[32];
+    char buf[256];
+    uint32_t data;
+    if (file->status != FR_OK)
+    {
+        return;
+    }
+
+    sprintf(buf, "%06ld     ", ++file->numRecords);
+
+    sprintf(str, "%010ld     ", (uint32_t)(time/1000));
+    strcat(buf, str);
+
+    //vBat
+    data = (uint32_t)(fltData[3] * 10);
+    sprintf(str, "%2lu.%1lu     ", data/10, data % 10);
+    strcat(buf, str);
+
+    //iBat
+    data = (uint32_t)(fltData[1] * 100);
+    sprintf(str, "%2lu.%02lu     ", data/100, data % 100);
+    strcat(buf, str);
+
+    //Capacity mAh
+    data = (uint32_t)(fabs(fltData[4]) * 10);
+    sprintf(str, "%4lu.%1lu     ", data/10, data % 10);
+    strcat(buf, str);
+
+    sprintf(str, "\r\n");
+    strcat(buf, str);
+
+    uint32_t bytesWrote;
+    file->status = f_write(&file->fil, buf, strlen(buf), (UINT*)&bytesWrote);
+}
+
+/**
+  * @brief  Sync file
+  * @retval None
+  */
+static void FileSync(file_t* file)
+{
+    if (file->status == FR_OK)
+    {
+        file->status = f_sync(&file->fil);
+    }
+}
