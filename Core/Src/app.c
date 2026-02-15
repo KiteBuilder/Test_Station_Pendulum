@@ -68,7 +68,7 @@ ILI9341_FontDef Font_16x26 = {16, 26, Font16x26, 32, 126};
 rect_t vBat_wnd, iBat_wnd, pid_wnd, text_wnd;
 point_t vBat_hdr, iBat_hdr, pid_hdr;
 
-graph_t vBat_graph, iBat_graph, iFilt_graph, pid_graph;
+graph_t vBat_graph, iBat_graph, iFilt_graph, pid_error_graph;
 
 bool f_touch = false;
 uint16_t guard_cnt = 0;
@@ -229,7 +229,7 @@ static void InitGraphInterface()
     ILI9341_WriteString(str, Font_7x10, iBat_hdr.x, iBat_hdr.y, Blue, Green);
 
     pid_hdr.x = 200; pid_hdr.y = y_offset - Font_7x10.height;
-    sprintf(str, "PID(roll)(0 - 2)");
+    sprintf(str, "PID(roll)(-90 - 90)");
     ILI9341_WriteString(str, Font_7x10, pid_hdr.x, pid_hdr.y, Green, Blue);
 
     iBat_wnd.left   = 1;
@@ -249,7 +249,7 @@ static void InitGraphInterface()
     pid_wnd.top    = vBat_wnd.bottom + 5;
     pid_wnd.right  = 318;
     pid_wnd.bottom = pid_wnd.top + wnd_height;
-    Graph_InitDynamic(&pid_wnd, &pid_graph, 0, 20, Blue, Black);
+    Graph_InitDynamic(&pid_wnd, &pid_error_graph, -900, 900, Blue, Black);
 
     text_wnd.left = 0; text_wnd.right = 320; text_wnd.top = 0; text_wnd.bottom = Font_16x26.height * 2;
 }
@@ -291,8 +291,8 @@ static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
     int16_t vBat_int = (int16_t)(fltData[2] * 10);
     Graph_DynamicDraw(vBat_int, &vBat_graph, true);
 
-    int16_t pid_int = 1;
-    Graph_DynamicDraw(pid_int, &pid_graph, true);
+    int16_t pid_error_int = (int16_t)(fltData[7] * 10);
+    Graph_DynamicDraw(pid_error_int, &pid_error_graph, true);
 }
 
 /**
@@ -326,7 +326,7 @@ static void InitFileSystem(file_t *file)
 
     if (file->status == FR_OK)
     {
-        sprintf(str, "    N:         T(ms):     U(V):  I(A):   E(Wh):  \r\n");
+        sprintf(str, "    N:         T(ms):    U(V):     I(A):     E(Wh):  \r\n");
 
         uint32_t bytesWrote;
         file->status = f_write(&file->fil, str, strlen(str), (UINT*)&bytesWrote);
