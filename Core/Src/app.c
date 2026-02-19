@@ -65,10 +65,12 @@ ILI9341_FontDef Font_11x18 = {11, 18, Font11x18, 32, 126};
 ILI9341_FontDef Font_16x26 = {16, 26, Font16x26, 32, 126};
 #endif
 
-rect_t vBat_wnd, iBat_wnd, pid_wnd, text_wnd;
-point_t vBat_hdr, iBat_hdr, pid_hdr;
+rect_t power_wnd, pid_wnd, error_wnd, text_wnd;
+point_t power_hdr, pid_hdr, error_hdr;
 
-graph_t vBat_graph, iBat_graph, iFilt_graph, pid_error_graph;
+graph_t iBat_graph, vBat_graph;
+graph_t pid_P_graph, pid_I_graph, pid_D_graph;
+graph_t error_graph, roll_graph, setpoint_graph;
 
 bool f_touch = false;
 uint16_t guard_cnt = 0;
@@ -220,36 +222,40 @@ static void InitGraphInterface()
     const uint16_t wnd_height = 130;
     const uint16_t y_offset= 70;
 
-    vBat_hdr.x = 0; vBat_hdr.y = y_offset - Font_7x10.height;
-    sprintf(str, "iBat(0-5)A");
-    ILI9341_WriteString(str, Font_7x10, vBat_hdr.x, vBat_hdr.y, Yellow, Red);
+    power_hdr.x = 5; power_hdr.y = y_offset - Font_7x10.height;
+    sprintf(str, "Power");
+    ILI9341_WriteString(str, Font_7x10, power_hdr.x, power_hdr.y, Yellow, Red);
 
-    iBat_hdr.x = 100; iBat_hdr.y = y_offset - Font_7x10.height;
-    sprintf(str, "vBat(9-18)V");
-    ILI9341_WriteString(str, Font_7x10, iBat_hdr.x, iBat_hdr.y, Blue, Green);
+    pid_hdr.x = 50; pid_hdr.y = y_offset - Font_7x10.height;
+    sprintf(str, "PID");
+    ILI9341_WriteString(str, Font_7x10, pid_hdr.x, pid_hdr.y, Blue, Green);
 
-    pid_hdr.x = 200; pid_hdr.y = y_offset - Font_7x10.height;
-    sprintf(str, "PID(roll)(-90 - 90)");
-    ILI9341_WriteString(str, Font_7x10, pid_hdr.x, pid_hdr.y, Green, Blue);
+    error_hdr.x = 80; error_hdr.y = y_offset - Font_7x10.height;
+    sprintf(str, "Error");
+    ILI9341_WriteString(str, Font_7x10, error_hdr.x, error_hdr.y, Green, Blue);
 
-    iBat_wnd.left   = 1;
-    iBat_wnd.top    = y_offset;
-    iBat_wnd.right  = 318;
-    iBat_wnd.bottom = iBat_wnd.top + wnd_height;
-    Graph_InitDynamic(&iBat_wnd, &iFilt_graph, 0, 500, Yellow, Black);
-    Graph_InitDynamic(&iBat_wnd, &iBat_graph, 0, 500, Red, Black);
-
-    vBat_wnd.left   = 1;
-    vBat_wnd.top    = iBat_wnd.bottom + 5;
-    vBat_wnd.right  = 318;
-    vBat_wnd.bottom = vBat_wnd.top + wnd_height;
-    Graph_InitDynamic(&vBat_wnd, &vBat_graph, 90, 180, Green, Black);
+    power_wnd.left   = 1;
+    power_wnd.top    = y_offset;
+    power_wnd.right  = 318;
+    power_wnd.bottom = power_wnd.top + wnd_height;
+    Graph_InitDynamic(&power_wnd, &iBat_graph, 0, 3000, Red, Black);
+    Graph_InitDynamic(&power_wnd, &vBat_graph, 0, 2000, Yellow, Black);
 
     pid_wnd.left   = 1;
-    pid_wnd.top    = vBat_wnd.bottom + 5;
+    pid_wnd.top    = power_wnd.bottom + 5;
     pid_wnd.right  = 318;
     pid_wnd.bottom = pid_wnd.top + wnd_height;
-    Graph_InitDynamic(&pid_wnd, &pid_error_graph, -900, 900, Blue, Black);
+    Graph_InitDynamic(&pid_wnd, &pid_P_graph, -1000, 1000, Red, Black);
+    Graph_InitDynamic(&pid_wnd, &pid_I_graph, -1000, 1000, Green, Black);
+    Graph_InitDynamic(&pid_wnd, &pid_D_graph, -1000, 1000, Blue, Black);        
+
+    pid_wnd.left   = 1;
+    pid_wnd.top    = pid_wnd.bottom + 5;
+    pid_wnd.right  = 318;
+    pid_wnd.bottom = pid_wnd.top + wnd_height;
+    Graph_InitDynamic(&error_wnd, &error_graph, -900, 900, Red, Black);
+    Graph_InitDynamic(&error_wnd, &roll_graph, -900, 900, GreenYellow, Black);
+    Graph_InitDynamic(&error_wnd, &setpoint_graph, -900, 900, Magenta, Black);
 
     text_wnd.left = 0; text_wnd.right = 320; text_wnd.top = 0; text_wnd.bottom = Font_16x26.height * 2;
 }
@@ -264,35 +270,44 @@ static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
     point_t point;
     uint32_t data;
 
+    //Top information window update
     //IBat filtered
     point.x = 0; point.y = Font_16x26.height + 5;
-    data = (uint32_t)(fabs(fltData[1]) * 100);
+    data = (uint32_t)(fabs(fltData[0]) * 100);
     sprintf(str, "I%2lu.%02lu", data/100, data % 100);
     ILI9341_WriteString(str, Font_16x26, point.x, point.y, Red, Black);
 
     //vBat filtered
     point.x = 0; point.y = 0;
-    data = (uint32_t)(fltData[3] * 10);
+    data = (uint32_t)(fltData[1] * 10);
     sprintf(str, "V%2lu.%1lu", data/10, data % 10);
     ILI9341_WriteString(str, Font_16x26, point.x, point.y, Green, Black);
 
     //Capacity mAh
     point.x = Font_16x26.width * 8; point.y = Font_16x26.height + 5;
-    data = (uint32_t)(fabs(fltData[4]) * 10);
+    data = (uint32_t)(fabs(fltData[2]) * 10);
     sprintf(str, "E%4lu.%1lumAh", data/10, data % 10);
     ILI9341_WriteString(str, Font_16x26, point.x, point.y, Orange, Black);
- 
-    int16_t iFilt_int = (int16_t)(fltData[1] * 100);
-    Graph_DynamicDraw(iFilt_int, &iFilt_graph, false);
 
+    //Graph windows update
     int16_t iBat_int = (int16_t)(fltData[0] * 100);
+    int16_t vBat_int = (int16_t)(fltData[1] * 10);
     Graph_DynamicDraw(iBat_int, &iBat_graph, true);
-
-    int16_t vBat_int = (int16_t)(fltData[2] * 10);
     Graph_DynamicDraw(vBat_int, &vBat_graph, true);
 
-    int16_t pid_error_int = (int16_t)(fltData[7] * 10);
-    Graph_DynamicDraw(pid_error_int, &pid_error_graph, true);
+    int16_t pid_P_int = (int16_t)(fltData[8]);
+    int16_t pid_I_int = (int16_t)(fltData[9]);
+    int16_t pid_D_int = (int16_t)(fltData[10]);        
+    Graph_DynamicDraw(pid_P_int, &pid_P_graph, true);
+    Graph_DynamicDraw(pid_I_int, &pid_I_graph, true);
+    Graph_DynamicDraw(pid_D_int, &pid_D_graph, true);        
+
+    int16_t setpoint_int = (int16_t)(fltData[5] * 10);
+    int16_t roll_int = (int16_t)(fltData[6] * 10);
+    int16_t error_int = (int16_t)(fltData[7] * 10);
+    Graph_DynamicDraw(setpoint_int, &setpoint_graph, true);
+    Graph_DynamicDraw(roll_int, &roll_graph, true);        
+    Graph_DynamicDraw(error_int, &error_graph, true);
 }
 
 /**
