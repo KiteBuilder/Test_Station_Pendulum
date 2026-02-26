@@ -77,7 +77,10 @@ uint16_t guard_cnt = 0;
 const uint16_t guard_threshold = 500;
 uint16_t x, y;
 
-const uint16_t data_num = 11;
+#define MAX_TXT_SCR 2 //amount of text screens
+uint8_t txt_scr_id = 1; //text screen id 
+
+const uint16_t data_num = 16;
 float fltData[RX_MAX_CNT/sizeof(float)] = {0.0};
 
 file_t file;
@@ -150,8 +153,13 @@ void exec(void)
   if (f_touch == true)
   {
       f_touch = false;
-      if (y < text_wnd.bottom)
+      if ((DISPLAY_PIX_WIDTH - y) < text_wnd.bottom)
       {
+          if (++txt_scr_id >= MAX_TXT_SCR)
+          {
+                txt_scr_id = 0;
+          }
+
           ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
       }
   }
@@ -249,10 +257,10 @@ static void InitGraphInterface()
     Graph_InitDynamic(&pid_wnd, &pid_I_graph, -1000, 1000, Green, Black);
     Graph_InitDynamic(&pid_wnd, &pid_D_graph, -1000, 1000, Blue, Black);        
 
-    pid_wnd.left   = 1;
-    pid_wnd.top    = pid_wnd.bottom + 5;
-    pid_wnd.right  = 318;
-    pid_wnd.bottom = pid_wnd.top + wnd_height;
+    error_wnd.left   = 1;
+    error_wnd.top    = pid_wnd.bottom + 5;
+    error_wnd.right  = 318;
+    error_wnd.bottom = error_wnd.top + wnd_height;
     Graph_InitDynamic(&error_wnd, &error_graph, -900, 900, Red, Black);
     Graph_InitDynamic(&error_wnd, &roll_graph, -900, 900, GreenYellow, Black);
     Graph_InitDynamic(&error_wnd, &setpoint_graph, -900, 900, Magenta, Black);
@@ -260,20 +268,20 @@ static void InitGraphInterface()
     text_wnd.left = 0; text_wnd.right = 320; text_wnd.top = 0; text_wnd.bottom = Font_16x26.height * 2;
 }
 
+
 /**
-  * @brief  To plot graphs and update text information
+  * @brief  To draw two windows for the Graphs
   * @retval None
   */
-static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
+static void Print_Screen_0(float *flt_data)
 {
     char str[32];
     point_t point;
     uint32_t data;
 
-    //Top information window update
     //IBat filtered
     point.x = 0; point.y = Font_16x26.height + 5;
-    data = (uint32_t)(fabs(fltData[0]) * 100);
+    data = (uint32_t)(fltData[0] * 100);
     sprintf(str, "I%2lu.%02lu", data/100, data % 100);
     ILI9341_WriteString(str, Font_16x26, point.x, point.y, Red, Black);
 
@@ -285,9 +293,87 @@ static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
 
     //Capacity mAh
     point.x = Font_16x26.width * 8; point.y = Font_16x26.height + 5;
-    data = (uint32_t)(fabs(fltData[2]) * 10);
+    data = (uint32_t)(fltData[2] * 10);
     sprintf(str, "E%4lu.%1lumAh", data/10, data % 10);
     ILI9341_WriteString(str, Font_16x26, point.x, point.y, Orange, Black);
+}
+
+/**
+  * @brief  To draw two windows for the Graphs
+  * @retval None
+  */
+static void Print_Screen_1(float *flt_data)
+{
+    char str[32];
+    point_t point;
+    uint32_t data;
+    char sign;
+
+    //Left Motor Throttle
+    point.x = 0; point.y = 0;
+    data = (uint32_t)(fltData[9]);
+    sprintf(str, "Lm:%4lu", data);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Yellow, Black);
+
+    //Right Motor Throttle
+    point.x = Font_11x18.width * 8; point.y = 0;
+    data = (uint32_t)(fltData[10]);
+    sprintf(str, "Rm:%4lu", data);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Yellow, Black);    
+
+    //PID P
+    point.x = 0; point.y = Font_11x18.height + 2;
+    data = (uint32_t)(fabs(fltData[6]) * 10);
+    sign = (fltData[6] < 0.0f) ? '-' : ' ';
+    sprintf(str, "P:%c%3lu.%1lu", sign, data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Red, Black);
+
+    //PID I
+    point.x = Font_11x18.width * 9; point.y = Font_11x18.height + 2;
+    data = (uint32_t)(fabs(fltData[7]) * 10);
+    sign = (fltData[7] < 0.0f) ? '-' : ' ';
+    sprintf(str, "I:%c%3lu.%1lu", sign, data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Green, Black);    
+
+    //PID D
+    point.x = (Font_11x18.width * 9) * 2; point.y = Font_11x18.height + 2;
+    data = (uint32_t)(fabs(fltData[8]) * 10);
+    sign = (fltData[8] < 0.0f) ? '-' : ' ';
+    sprintf(str, "D:%c%3lu.%1lu", sign, data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Blue, Black);
+
+    //PID Error
+    point.x = 0; point.y = (Font_11x18.height + 2) * 2;
+    data = (uint32_t)(fabs(fltData[5]) * 10);
+    sign = (fltData[5] < 0.0f) ? '-' : ' ';
+    sprintf(str, "Err:%c%2lu.%1lu", sign, data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Red, Black);
+
+    //Roll
+    point.x = Font_11x18.width * 12; point.y = (Font_11x18.height + 2) * 2;
+    data = (uint32_t)(fabs(fltData[4]) * 10);
+    sign = (fltData[4] < 0.0f) ? '-' : ' ';
+    sprintf(str, "Roll:%c%2lu.%1lu", sign, data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Green, Black);
+}
+
+/**
+  * @brief  To plot graphs and update text information
+  * @retval None
+  */
+static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
+{
+    //Top information window update
+    switch (txt_scr_id)
+    {
+        case 0:
+            Print_Screen_0(flt_data);
+            break;
+
+        case 1:
+            Print_Screen_1(flt_data);
+            break;
+    }
 
     //Graph windows update
     int16_t iBat_int = (int16_t)(fltData[0] * 100);
@@ -295,16 +381,16 @@ static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
     Graph_DynamicDraw(iBat_int, &iBat_graph, true);
     Graph_DynamicDraw(vBat_int, &vBat_graph, true);
 
-    int16_t pid_P_int = (int16_t)(fltData[8]);
-    int16_t pid_I_int = (int16_t)(fltData[9]);
-    int16_t pid_D_int = (int16_t)(fltData[10]);        
+    int16_t pid_P_int = (int16_t)(fltData[6]);
+    int16_t pid_I_int = (int16_t)(fltData[7]);
+    int16_t pid_D_int = (int16_t)(fltData[8]);        
     Graph_DynamicDraw(pid_P_int, &pid_P_graph, true);
     Graph_DynamicDraw(pid_I_int, &pid_I_graph, true);
     Graph_DynamicDraw(pid_D_int, &pid_D_graph, true);        
 
-    int16_t setpoint_int = (int16_t)(fltData[5] * 10);
-    int16_t roll_int = (int16_t)(fltData[6] * 10);
-    int16_t error_int = (int16_t)(fltData[7] * 10);
+    int16_t setpoint_int = (int16_t)(fltData[3] * 10);
+    int16_t roll_int = (int16_t)(fltData[4] * 10);
+    int16_t error_int = (int16_t)(fltData[5] * 10);
     Graph_DynamicDraw(setpoint_int, &setpoint_graph, true);
     Graph_DynamicDraw(roll_int, &roll_graph, true);        
     Graph_DynamicDraw(error_int, &error_graph, true);
