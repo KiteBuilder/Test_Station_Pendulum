@@ -16,6 +16,7 @@
 #include "TouchScreen.h"
 #include "DebugProtocol.h"
 #include "Times.h"
+#include "Key.h"
 
 extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi2;
@@ -40,6 +41,7 @@ static void GraphsAndTextUpdate(timeDelta_t, float*);
 static void InitFileSystem(file_t*);
 static void FileDataUpdate(file_t *file, timeUs_t time, float*);
 static void FileSync(file_t*);
+static void Text_Scr_Key_Handler(key_state_e);
 
 ILI9341_Port cs  = {TFT_CS_GPIO_Port , TFT_CS_Pin };
 ILI9341_Port dc  = {TFT_DC_GPIO_Port , TFT_DC_Pin };
@@ -77,8 +79,9 @@ uint16_t guard_cnt = 0;
 const uint16_t guard_threshold = 500;
 uint16_t x, y;
 
-#define MAX_TXT_SCR 2 //amount of text screens
-uint8_t txt_scr_id = 1; //text screen id 
+#define MAX_TXT_SCR  2 //amount of text screens
+uint8_t txt_scr_id = 0; //text screen id
+key_t txt_scr_key;
 
 const uint16_t data_num = 16;
 float fltData[RX_MAX_CNT/sizeof(float)] = {0.0};
@@ -115,7 +118,10 @@ void initialization(void)
 
   Debug_InitProtocol(&huart1, fltData);
 
-  InitFileSystem(&file);  
+  InitFileSystem(&file);
+
+  Key_Init(&txt_scr_key, GPIOA, GPIO_PIN_0, LO_LEVEL, &Text_Scr_Key_Handler);
+
 }
 
 /**
@@ -125,50 +131,52 @@ void initialization(void)
   */
 void exec(void)
 {
-  if (Debug_IsRxready())
-  {
-      currentTimeUs = micros();
-      timeDelta_t dT = currentTimeUs - previousTimeUs;
-      previousTimeUs = currentTimeUs;
-      for (uint32_t i = 0; i < data_num; i++)
-      {
-          fltDataAvg[i] += fltData[i];
-      }
-      GraphsAndTextUpdate(dT, fltData);
-      if (++samples_cnt == samples_threshold)
-      {
-          samples_cnt = 0;
-          for (uint32_t i = 0; i < data_num; i++)
-          {
-              fltDataAvg[i] /= samples_threshold;
-          }
-          FileDataUpdate(&file, currentTimeUs, fltDataAvg);
-          for (uint32_t i = 0; i < data_num; i++)
-          {
-              fltDataAvg[i] = 0;
-          }
-      }
-  }
+    if (Debug_IsRxready())
+    {
+        currentTimeUs = micros();
+        timeDelta_t dT = currentTimeUs - previousTimeUs;
+        previousTimeUs = currentTimeUs;
+        for (uint32_t i = 0; i < data_num; i++)
+        {
+            fltDataAvg[i] += fltData[i];
+        }
+        GraphsAndTextUpdate(dT, fltData);
+        if (++samples_cnt == samples_threshold)
+        {
+            samples_cnt = 0;
+            for (uint32_t i = 0; i < data_num; i++)
+            {
+                fltDataAvg[i] /= samples_threshold;
+            }
+            FileDataUpdate(&file, currentTimeUs, fltDataAvg);
+            for (uint32_t i = 0; i < data_num; i++)
+            {
+                fltDataAvg[i] = 0;
+            }
+        }
+    }
 
-  if (f_touch == true)
-  {
-      f_touch = false;
-      if ((DISPLAY_PIX_WIDTH - y) < text_wnd.bottom)
-      {
-          if (++txt_scr_id >= MAX_TXT_SCR)
-          {
-                txt_scr_id = 0;
-          }
+    if (f_touch == true)
+    {
+        f_touch = false;
+        if ((DISPLAY_PIX_WIDTH - y) < text_wnd.bottom)
+        {
+            if (++txt_scr_id >= MAX_TXT_SCR)
+            {
+                    txt_scr_id = 0;
+            }
 
-          ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
-      }
-  }
+            ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
+        }
+    }
 
-  if (f_syncFile == true)
-  {
-      f_syncFile = false;
-      FileSync(&file);
-  }
+    if (f_syncFile == true)
+    {
+        f_syncFile = false;
+        FileSync(&file);
+    }
+
+    Key_CheckState(&txt_scr_key);
 }
 
 /**
@@ -485,5 +493,22 @@ static void FileSync(file_t* file)
     if (file->status == FR_OK)
     {
         file->status = f_sync(&file->fil);
+    }
+}
+
+/**
+  * @brief  Sync file
+  * @retval None
+  */
+static void Text_Scr_Key_Handler(key_state_e state)
+{
+    if (state == PRESSED)
+    {
+        if (++txt_scr_id >= MAX_TXT_SCR)
+        {
+                txt_scr_id = 0;
+        }
+
+        ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
     }
 }
