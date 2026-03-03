@@ -435,7 +435,7 @@ static void InitFileSystem(file_t *file)
 
     if (file->status == FR_OK)
     {
-        sprintf(str, "    N:         T(ms):    U(V):     I(A):     E(Wh):  \r\n");
+        sprintf(str, "    N:         T(ms):    U(V):     I(A):     E(Wh):    Lm():    Rm():       P():       I():       D():      Err:     Roll: \r\n");
 
         uint32_t bytesWrote;
         file->status = f_write(&file->fil, str, strlen(str), (UINT*)&bytesWrote);
@@ -450,8 +450,10 @@ static void InitFileSystem(file_t *file)
 static void FileDataUpdate(file_t *file, timeUs_t time, float *fltData)
 {
     char str[32];
-    char buf[256];
+    char buf[512];
+    char sign;
     uint32_t data;
+
     if (file->status != FR_OK)
     {
         return;
@@ -475,6 +477,46 @@ static void FileDataUpdate(file_t *file, timeUs_t time, float *fltData)
     //Capacity mAh
     data = (uint32_t)(fabs(fltData[4]) * 10);
     sprintf(str, "%4lu.%1lu     ", data/10, data % 10);
+    strcat(buf, str);
+
+    //Left Motor
+    data = (uint32_t)(fltData[9]);
+    sprintf(str, "%4lu     ", data);
+    strcat(buf, str);
+
+    //Right Motor
+    data = (uint32_t)(fltData[10]);
+    sprintf(str, "%4lu     ", data);
+    strcat(buf, str);
+
+    //PID P
+    data = (uint32_t)(fabs(fltData[6]) * 10);
+    sign = (fltData[6] < 0.0f) ? '-' : ' ';
+    sprintf(str, "%c%3lu.%1lu     ", sign, data/10, data % 10);
+    strcat(buf, str);
+
+    //PID I
+    data = (uint32_t)(fabs(fltData[7]) * 10);
+    sign = (fltData[7] < 0.0f) ? '-' : ' ';
+    sprintf(str, "%c%3lu.%1lu     ", sign, data/10, data % 10);
+    strcat(buf, str); 
+
+    //PID D
+    data = (uint32_t)(fabs(fltData[8]) * 10);
+    sign = (fltData[8] < 0.0f) ? '-' : ' ';
+    sprintf(str, "%c%3lu.%1lu     ", sign, data/10, data % 10);
+    strcat(buf, str);
+
+    //PID Error
+    data = (uint32_t)(fabs(fltData[5]) * 10);
+    sign = (fltData[5] < 0.0f) ? '-' : ' ';
+    sprintf(str, "%c%2lu.%1lu     ", sign, data/10, data % 10);
+    strcat(buf, str);
+
+    //Roll
+    data = (uint32_t)(fabs(fltData[4]) * 10);
+    sign = (fltData[4] < 0.0f) ? '-' : ' ';
+    sprintf(str, "%c%2lu.%1lu     ", sign, data/10, data % 10);
     strcat(buf, str);
 
     sprintf(str, "\r\n");
