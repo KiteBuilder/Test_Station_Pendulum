@@ -465,17 +465,17 @@ static void FileDataUpdate(file_t *file, timeUs_t time, float *fltData)
     strcat(buf, str);
 
     //vBat
-    data = (uint32_t)(fltData[3] * 10);
+    data = (uint32_t)(fltData[1] * 10);
     sprintf(str, "%2lu.%1lu     ", data/10, data % 10);
     strcat(buf, str);
 
     //iBat
-    data = (uint32_t)(fltData[1] * 100);
+    data = (uint32_t)(fltData[0] * 100);
     sprintf(str, "%2lu.%02lu     ", data/100, data % 100);
     strcat(buf, str);
 
     //Capacity mAh
-    data = (uint32_t)(fabs(fltData[4]) * 10);
+    data = (uint32_t)(fabs(fltData[2]) * 10);
     sprintf(str, "%4lu.%1lu     ", data/10, data % 10);
     strcat(buf, str);
 
