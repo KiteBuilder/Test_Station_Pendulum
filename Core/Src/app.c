@@ -17,12 +17,14 @@
 #include "DebugProtocol.h"
 #include "Times.h"
 #include "Key.h"
+#include "KeyPad.h"
 
 extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi2;
 extern SPI_HandleTypeDef hspi3;
 extern DMA_HandleTypeDef hdma_spi2_tx;
 extern UART_HandleTypeDef huart1;
+extern ADC_HandleTypeDef hadc1;
 
 typedef struct
 {
@@ -38,10 +40,12 @@ timeUs_t currentTimeUs = 0, previousTimeUs = 0;
 
 static void InitGraphInterface();
 static void GraphsAndTextUpdate(timeDelta_t, float*);
+static void Print_Screen_2();
 static void InitFileSystem(file_t*);
-static void FileDataUpdate(file_t *file, timeUs_t time, float*);
+static void FileDataUpdate(file_t*, timeUs_t, float*);
 static void FileSync(file_t*);
 static void Text_Scr_Key_Handler(key_state_e);
+static void KeyPad_Handler();
 
 ILI9341_Port cs  = {TFT_CS_GPIO_Port , TFT_CS_Pin };
 ILI9341_Port dc  = {TFT_DC_GPIO_Port , TFT_DC_Pin };
@@ -79,7 +83,7 @@ uint16_t guard_cnt = 0;
 const uint16_t guard_threshold = 500;
 uint16_t x, y;
 
-#define MAX_TXT_SCR  2 //amount of text screens
+#define MAX_TXT_SCR  3 //amount of text screens
 uint8_t txt_scr_id = 0; //text screen id
 key_t txt_scr_key;
 
@@ -96,6 +100,10 @@ uint16_t syncFile_cnt = 0;
 const uint16_t sync_period = 5000; //sync file period in milliseconds
 
 bool first_filter_load = true;
+
+bool f_scan = false;
+uint16_t scan_cnt = 0;
+const uint16_t scan_period = 10; //sync period for 1ms HAL_SYSTICK
 
 /**
   * @brief
@@ -176,7 +184,17 @@ void exec(void)
         FileSync(&file);
     }
 
-    Key_CheckState(&txt_scr_key);
+    if (f_scan == true)
+    {
+        f_scan = false;
+
+        Key_CheckState(&txt_scr_key);
+
+        if (KeyPad_IsPressed())
+        {
+            KeyPad_Handler();
+        }
+    }
 }
 
 /**
@@ -205,10 +223,19 @@ void HAL_SYSTICK_Callback()
         syncFile_cnt = 0;
         f_syncFile = true;
     }
+
+    if (++scan_cnt == scan_period)
+    {
+        scan_cnt = 0;
+        f_scan = true;
+
+        KeyPad_Scan(&hadc1);
+    }
 }
 
 /**
   * @brief
+  * @param None
   * @retval None
   */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -226,6 +253,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
             guard_cnt =  guard_threshold;
         }
     }
+}
+
+/**
+  * @brief 
+  * @param None
+  * @retval None
+  */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+    KeyPad_Handle(hadc);
 }
 
 /**
@@ -366,6 +403,22 @@ static void Print_Screen_1(float *flt_data)
 }
 
 /**
+  * @brief  To draw two windows for the Graphs
+  * @retval None
+  */
+static void Print_Screen_2()
+{
+    char str[32];
+    point_t point;
+    uint16_t data;
+
+    point.x = 0; point.y = 0;
+    data = KeyPad_GetVal();
+    sprintf(str, "Key_val: 0x%4X", data);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Yellow, Black);
+}
+
+/**
   * @brief  To plot graphs and update text information
   * @retval None
   */
@@ -381,6 +434,9 @@ static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
         case 1:
             Print_Screen_1(flt_data);
             break;
+
+        case 2:
+            Print_Screen_2();
     }
 
     //Graph windows update
@@ -539,7 +595,7 @@ static void FileSync(file_t* file)
 }
 
 /**
-  * @brief  Sync file
+  * @brief  Key handler
   * @retval None
   */
 static void Text_Scr_Key_Handler(key_state_e state)
@@ -553,4 +609,17 @@ static void Text_Scr_Key_Handler(key_state_e state)
 
         ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
     }
+}
+
+/**
+  * @brief  KeyPad handler
+  * @retval None
+  */
+static void KeyPad_Handler()
+{
+    //uint16_t key_val = KeyPad_GetVal();
+
+    Print_Screen_2();
+
+    KeyPad_Release();
 }
