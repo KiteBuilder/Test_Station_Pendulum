@@ -39,6 +39,7 @@ typedef struct
 timeUs_t currentTimeUs = 0, previousTimeUs = 0;
 
 static void InitGraphInterface();
+static void TextUpdate(float*);
 static void GraphsAndTextUpdate(timeDelta_t, float*);
 static void Print_Screen_2();
 static void InitFileSystem(file_t*);
@@ -86,6 +87,10 @@ uint16_t x, y;
 #define MAX_TXT_SCR  3 //amount of text screens
 uint8_t txt_scr_id = 0; //text screen id
 key_t txt_scr_key;
+
+#define MAX_PARAM   4 //amount of parameters that can be selected
+uint8_t param_id = 0;
+bool f_TxReady = true;
 
 const uint16_t data_num = 16;
 float fltData[RX_MAX_CNT/sizeof(float)] = {0.0};
@@ -148,7 +153,9 @@ void exec(void)
         {
             fltDataAvg[i] += fltData[i];
         }
+
         GraphsAndTextUpdate(dT, fltData);
+
         if (++samples_cnt == samples_threshold)
         {
             samples_cnt = 0;
@@ -156,7 +163,9 @@ void exec(void)
             {
                 fltDataAvg[i] /= samples_threshold;
             }
+
             FileDataUpdate(&file, currentTimeUs, fltDataAvg);
+            
             for (uint32_t i = 0; i < data_num; i++)
             {
                 fltDataAvg[i] = 0;
@@ -193,7 +202,23 @@ void exec(void)
         if (KeyPad_IsPressed())
         {
             KeyPad_Handler();
+            KeyPad_Release();
         }
+
+        TextUpdate(fltData);
+    }
+}
+
+/**
+  * @brief
+  * @param
+  * @retval
+  */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == &huart1)
+    {
+        f_TxReady = true;
     }
 }
 
@@ -310,12 +335,12 @@ static void InitGraphInterface()
     Graph_InitDynamic(&error_wnd, &roll_graph, -900, 900, GreenYellow, Black);
     Graph_InitDynamic(&error_wnd, &setpoint_graph, -900, 900, Magenta, Black);
 
-    text_wnd.left = 0; text_wnd.right = 320; text_wnd.top = 0; text_wnd.bottom = Font_16x26.height * 2;
+    text_wnd.left = 0; text_wnd.right = 320; text_wnd.top = 0; text_wnd.bottom = Font_11x18.height * 3 + 1;
 }
 
 
 /**
-  * @brief  To draw two windows for the Graphs
+  * @brief  Power parameters screen
   * @retval None
   */
 static void Print_Screen_0(float *flt_data)
@@ -344,7 +369,7 @@ static void Print_Screen_0(float *flt_data)
 }
 
 /**
-  * @brief  To draw two windows for the Graphs
+  * @brief  Motors and PID controller screen
   * @retval None
   */
 static void Print_Screen_1(float *flt_data)
@@ -403,19 +428,62 @@ static void Print_Screen_1(float *flt_data)
 }
 
 /**
-  * @brief  To draw two windows for the Graphs
+  * @brief  PID coefficients management screen
   * @retval None
   */
-static void Print_Screen_2()
+static void Print_Screen_2(float *flt_data)
 {
     char str[32];
     point_t point;
-    uint16_t data;
+    uint32_t data;
+    uint16_t back_clr[MAX_PARAM] = {Black, Black, Black, Black};
 
-    point.x = 0; point.y = 0;
-    data = KeyPad_GetVal();
-    sprintf(str, "Key_val: 0x%4X", data);
-    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Yellow, Black);
+    back_clr[param_id] = Yellow;
+
+    //PID Kp
+    point.x = 0; point.y = 5;
+    data = (uint32_t)(fabs(fltData[11]) * 10);
+    sprintf(str, "Kp:%3lu.%1lu", data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Red, back_clr[0]);
+
+    //PID Ki
+    point.x = Font_11x18.width * 9; point.y = 5;
+    data = (uint32_t)(fabs(fltData[12]) * 10);
+    sprintf(str, "Ki:%3lu.%1lu", data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Green, back_clr[1]);    
+
+    //PID Kd
+    point.x = (Font_11x18.width * 9) * 2; point.y = 5;
+    data = (uint32_t)(fabs(fltData[13]) * 10);
+    sprintf(str, "Kd:%3lu.%1lu", data/10, data % 10);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Blue, back_clr[2]);
+
+    //Save
+    point.x = (Font_11x18.width * 9); point.y = Font_11x18.height + 10;
+    sprintf(str, "Save Param");
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Orange, back_clr[3]);    
+}
+
+/**
+  * @brief  To plot graphs and update text information
+  * @retval None
+  */
+static void TextUpdate(float *flt_data)
+{
+    //Top information window update
+    switch (txt_scr_id)
+    {
+        case 0:
+            Print_Screen_0(flt_data);
+            break;
+
+        case 1:
+            Print_Screen_1(flt_data);
+            break;
+
+        case 2:
+            Print_Screen_2(flt_data);
+    }
 }
 
 /**
@@ -436,7 +504,7 @@ static void GraphsAndTextUpdate(timeDelta_t dT, float *flt_data)
             break;
 
         case 2:
-            Print_Screen_2();
+            Print_Screen_2(flt_data);
     }
 
     //Graph windows update
@@ -612,14 +680,82 @@ static void Text_Scr_Key_Handler(key_state_e state)
 }
 
 /**
+  * @brief  UP/DOWN key handler
+  * @retval None
+  */
+ void up_down_handler(char ch)
+ {
+    char pid_code[MAX_PARAM] = {'P', 'I', 'D', 'S'};
+    uint8_t tx_bt;
+
+    if (param_id == MAX_PARAM - 1)
+    {
+        tx_bt = pid_code[param_id];
+    }
+    else
+    {
+        tx_bt = pid_code[param_id] + ch;
+    }
+
+    if (f_TxReady)
+    {
+        f_TxReady = false;              
+        HAL_UART_Transmit_IT(&huart1, &tx_bt, 1);
+    }
+ }
+
+
+/**
   * @brief  KeyPad handler
   * @retval None
   */
 static void KeyPad_Handler()
 {
-    //uint16_t key_val = KeyPad_GetVal();
+    uint16_t key_val = KeyPad_GetVal();
 
-    Print_Screen_2();
+    switch (key_val)
+    {
+        case UP_KEY_VAL:
+            if (txt_scr_id == 2)
+            {
+                up_down_handler('+');
+            }
+            break;
 
-    KeyPad_Release();
+        case DOWN_KEY_VAL:
+            if (txt_scr_id == 2)
+            {
+                up_down_handler('-');
+            }
+            break;
+            
+        case RIGH_KEY_VAL:
+            if (txt_scr_id == 2)
+            {
+                if (++param_id >= MAX_PARAM)
+                {
+                    param_id = 0;
+                }
+            }
+            break;
+
+        case LEFT_KEY_VAL:
+            if (txt_scr_id == 2)
+            {
+                if (--param_id >= MAX_PARAM)
+                {
+                    param_id = MAX_PARAM - 1;
+                }
+            }
+            break;
+
+        case ENTER_KEY_VAL:
+            if (++txt_scr_id >= MAX_TXT_SCR)
+            {
+                    txt_scr_id = 0;
+            }
+
+            ILI9341_DrawFillRectangle(text_wnd.left, text_wnd.top, text_wnd.right, text_wnd.bottom, Black);
+            break;
+    }
 }
