@@ -88,7 +88,7 @@ uint16_t x, y;
 uint8_t txt_scr_id = 0; //text screen id
 key_t txt_scr_key;
 
-#define MAX_PARAM   4 //amount of parameters that can be selected
+#define MAX_PARAM   6 //amount of parameters that can be selected
 uint8_t param_id = 0;
 bool f_TxReady = true;
 
@@ -109,6 +109,8 @@ bool first_filter_load = true;
 bool f_scan = false;
 uint16_t scan_cnt = 0;
 const uint16_t scan_period = 10; //sync period for 1ms HAL_SYSTICK
+
+bool f_start = false;
 
 /**
   * @brief
@@ -436,32 +438,50 @@ static void Print_Screen_2(float *flt_data)
     char str[32];
     point_t point;
     uint32_t data;
-    uint16_t back_clr[MAX_PARAM] = {Black, Black, Black, Black};
+    uint16_t back_clr[MAX_PARAM] = {Black, Black, Black, Black, Black, Black};
 
     back_clr[param_id] = Yellow;
 
     //PID Kp
     point.x = 0; point.y = 5;
-    data = (uint32_t)(fabs(fltData[11]) * 10);
+    data = (uint32_t)(fltData[11] * 10);
     sprintf(str, "Kp:%3lu.%1lu", data/10, data % 10);
     ILI9341_WriteString(str, Font_11x18, point.x, point.y, Red, back_clr[0]);
 
     //PID Ki
     point.x = Font_11x18.width * 9; point.y = 5;
-    data = (uint32_t)(fabs(fltData[12]) * 10);
+    data = (uint32_t)(fltData[12] * 10);
     sprintf(str, "Ki:%3lu.%1lu", data/10, data % 10);
-    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Green, back_clr[1]);    
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Green, back_clr[1]);
 
     //PID Kd
     point.x = (Font_11x18.width * 9) * 2; point.y = 5;
-    data = (uint32_t)(fabs(fltData[13]) * 10);
+    data = (uint32_t)(fltData[13] * 10);
     sprintf(str, "Kd:%3lu.%1lu", data/10, data % 10);
     ILI9341_WriteString(str, Font_11x18, point.x, point.y, Blue, back_clr[2]);
 
+    //Motor midpoint
+    point.x = 0; point.y = Font_11x18.height + 10;
+    data = (uint32_t)fltData[14];
+    sprintf(str, "MD:%4lu", data);
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Olive, back_clr[3]);
+
     //Save
     point.x = (Font_11x18.width * 9); point.y = Font_11x18.height + 10;
-    sprintf(str, "Save Param");
-    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Orange, back_clr[3]);    
+    sprintf(str, "Save");
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Cyan, back_clr[4]);  
+    
+    //Run
+    point.x = (Font_11x18.width * 15); point.y = Font_11x18.height + 10;
+    if (!f_start)
+    {
+        sprintf(str, "Start");
+    }
+    else
+    {
+        sprintf(str, "Stop ");
+    }
+    ILI9341_WriteString(str, Font_11x18, point.x, point.y, Magenta, back_clr[5]);
 }
 
 /**
@@ -685,12 +705,17 @@ static void Text_Scr_Key_Handler(key_state_e state)
   */
  void up_down_handler(char ch)
  {
-    char pid_code[MAX_PARAM] = {'P', 'I', 'D', 'S'};
+    char pid_code[MAX_PARAM] = {'P', 'I', 'D', 'M', 'S', 'R'};
     uint8_t tx_bt;
 
-    if (param_id == MAX_PARAM - 1)
+    if (pid_code[param_id] == 'S' || pid_code[param_id] == 'R')
     {
         tx_bt = pid_code[param_id];
+
+        if (pid_code[param_id] == 'R')
+        {
+            f_start = (!f_start) ? true : false;
+        }
     }
     else
     {
